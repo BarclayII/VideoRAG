@@ -15,9 +15,8 @@ from .._videoutil import encode_video_segments, encode_string_query
 @dataclass
 class NanoVectorDBStorage(BaseVectorStorage):
     cosine_better_than_threshold: float = 0.2
-    
-    def __post_init__(self):
 
+    def __post_init__(self):
         self._client_file_name = os.path.join(
             self.global_config["working_dir"], f"vdb_{self.namespace}.json"
         )
@@ -76,42 +75,49 @@ class NanoVectorDBStorage(BaseVectorStorage):
 class NanoVectorDBVideoSegmentStorage(BaseVectorStorage):
     embedding_func = None
     segment_retrieval_top_k: float = 2
-    
+
     def __post_init__(self):
-        
         self._client_file_name = os.path.join(
             self.global_config["working_dir"], f"vdb_{self.namespace}.json"
         )
         self._max_batch_size = self.global_config["video_embedding_batch_num"]
         self._client = NanoVectorDB(
-            self.global_config["video_embedding_dim"], storage_file=self._client_file_name
+            self.global_config["video_embedding_dim"],
+            storage_file=self._client_file_name,
         )
         self.top_k = self.global_config.get(
             "segment_retrieval_top_k", self.segment_retrieval_top_k
         )
-    
+
     async def upsert(self, video_name, segment_index2name, video_output_format):
-        embedder = imagebind_model.imagebind_huge(pretrained=True).cuda()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        embedder = imagebind_model.imagebind_huge(pretrained=True).to(device)
         embedder.eval()
-        
+
         logger.info(f"Inserting {len(segment_index2name)} segments to {self.namespace}")
         if not len(segment_index2name):
             logger.warning("You insert an empty data to vector DB")
             return []
         list_data, video_paths = [], []
-        cache_path = os.path.join(self.global_config["working_dir"], '_cache', video_name)
+        cache_path = os.path.join(
+            self.global_config["working_dir"], "_cache", video_name
+        )
         index_list = list(segment_index2name.keys())
         for index in index_list:
-            list_data.append({
-                "__id__": f"{video_name}_{index}",
-                "__video_name__": video_name,
-                "__index__": index,
-            })
+            list_data.append(
+                {
+                    "__id__": f"{video_name}_{index}",
+                    "__video_name__": video_name,
+                    "__index__": index,
+                }
+            )
             segment_name = segment_index2name[index]
-            video_file = os.path.join(cache_path, f"{segment_name}.{video_output_format}")
+            video_file = os.path.join(
+                cache_path, f"{segment_name}.{video_output_format}"
+            )
             video_paths.append(video_file)
         batches = [
-            video_paths[i: i + self._max_batch_size]
+            video_paths[i : i + self._max_batch_size]
             for i in range(0, len(video_paths), self._max_batch_size)
         ]
         embeddings = []
@@ -124,11 +130,12 @@ class NanoVectorDBVideoSegmentStorage(BaseVectorStorage):
             d["__vector__"] = embeddings[i]
         results = self._client.upsert(datas=list_data)
         return results
-    
+
     async def query(self, query: str):
-        embedder = imagebind_model.imagebind_huge(pretrained=True).cuda()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        embedder = imagebind_model.imagebind_huge(pretrained=True).to(device)
         embedder.eval()
-        
+
         embedding = encode_string_query(query, embedder)
         embedding = embedding[0]
         results = self._client.query(
@@ -140,6 +147,6 @@ class NanoVectorDBVideoSegmentStorage(BaseVectorStorage):
             {**dp, "id": dp["__id__"], "distance": dp["__metrics__"]} for dp in results
         ]
         return results
-    
+
     async def index_done_callback(self):
         self._client.save()

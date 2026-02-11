@@ -32,6 +32,7 @@ from ._videoutil import (
     retrieved_segment_caption,
 )
 
+
 def chunking_by_token_size(
     tokens_list: list[list[int]],
     doc_keys,
@@ -39,20 +40,17 @@ def chunking_by_token_size(
     overlap_token_size=128,
     max_token_size=1024,
 ):
-
     results = []
     for index, tokens in enumerate(tokens_list):
         chunk_token = []
         lengths = []
         for start in range(0, len(tokens), max_token_size - overlap_token_size):
-
             chunk_token.append(tokens[start : start + max_token_size])
             lengths.append(min(max_token_size, len(tokens) - start))
 
         # here somehow tricky, since the whole chunk tokens is list[list[list[int]]] for corpus(doc(chunk)),so it can't be decode entirely
         chunk_token = tiktoken_model.decode_batch(chunk_token)
         for i, chunk in enumerate(chunk_token):
-
             results.append(
                 {
                     "tokens": lengths[i],
@@ -75,13 +73,12 @@ def chunking_by_video_segments(
     for index in range(len(tokens_list)):
         if len(tokens_list[index]) > max_token_size:
             tokens_list[index] = tokens_list[index][:max_token_size]
-    
+
     results = []
     chunk_token = []
     chunk_segment_ids = []
     chunk_order_index = 0
     for index, tokens in enumerate(tokens_list):
-        
         if len(chunk_token) + len(tokens) <= max_token_size:
             # add new segment
             chunk_token += tokens.copy()
@@ -103,7 +100,7 @@ def chunking_by_video_segments(
             chunk_token += tokens.copy()
             chunk_segment_ids.append(doc_keys[index])
             chunk_order_index += 1
-    
+
     # save the last chunk
     if len(chunk_token) > 0:
         chunk = tiktoken_model.decode(chunk_token)
@@ -115,10 +112,10 @@ def chunking_by_video_segments(
                 "video_segment_id": chunk_segment_ids,
             }
         )
-    
+
     return results
-    
-    
+
+
 def chunking_by_seperators(
     tokens_list: list[list[int]],
     doc_keys,
@@ -126,7 +123,6 @@ def chunking_by_seperators(
     overlap_token_size=128,
     max_token_size=1024,
 ):
-
     splitter = SeparatorSplitter(
         separators=[
             tiktoken_model.encode(s) for s in PROMPTS["default_text_separator"]
@@ -142,7 +138,6 @@ def chunking_by_seperators(
         # here somehow tricky, since the whole chunk tokens is list[list[list[int]]] for corpus(doc(chunk)),so it can't be decode entirely
         chunk_token = tiktoken_model.decode_batch(chunk_token)
         for i, chunk in enumerate(chunk_token):
-
             results.append(
                 {
                     "tokens": lengths[i],
@@ -162,7 +157,7 @@ def get_chunks(new_videos, chunk_func=chunking_by_video_segments, **chunk_func_p
     for video_name in new_videos_list:
         segment_id_list = list(new_videos[video_name].keys())
         docs = [new_videos[video_name][index]["content"] for index in segment_id_list]
-        doc_keys = [f'{video_name}_{index}' for index in segment_id_list]
+        doc_keys = [f"{video_name}_{index}" for index in segment_id_list]
 
         ENCODER = tiktoken.encoding_for_model("gpt-4o")
         tokens = ENCODER.encode_batch(docs, num_threads=16)
@@ -346,9 +341,7 @@ async def _merge_edges_then_upsert(
         ),
     )
     return_edge_data = dict(
-        src_tgt=(src_id, tgt_id),
-        description=description,
-        weight=weight
+        src_tgt=(src_id, tgt_id), description=description, weight=weight
     )
     return return_edge_data
 
@@ -361,8 +354,10 @@ async def extract_entities(
 ) -> Union[BaseGraphStorage, None]:
     use_llm_func: callable = global_config["llm"]["best_model_func"]
     entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
-    
+
     ordered_chunks = list(chunks.items())
+    total_chunks = len(ordered_chunks)
+    logger.info(f"Starting entity extraction from {total_chunks} chunks...")
 
     entity_extract_prompt = PROMPTS["entity_extraction"]
     context_base = dict(
@@ -438,7 +433,7 @@ async def extract_entities(
             already_processed % len(PROMPTS["process_tickers"])
         ]
         print(
-            f"{now_ticks} Processed {already_processed} chunks, {already_entities} entities(duplicated), {already_relations} relations(duplicated)\r",
+            f"{now_ticks} Processed {already_processed}/{total_chunks} chunks, {already_entities} entities(duplicated), {already_relations} relations(duplicated)\r",
             end="",
             flush=True,
         )
@@ -457,22 +452,28 @@ async def extract_entities(
         for k, v in m_edges.items():
             # it's undirected graph
             maybe_edges[tuple(sorted(k))].extend(v)
+    logger.info(
+        f"Entity extraction complete. Merging {len(maybe_nodes)} entities and {len(maybe_edges)} relations into knowledge graph..."
+    )
     all_entities_data = await asyncio.gather(
         *[
             _merge_nodes_then_upsert(k, v, knowledge_graph_inst, global_config)
             for k, v in maybe_nodes.items()
         ]
     )
+    logger.info(f"Merged {len(all_entities_data)} entities. Now merging edges...")
     all_edges_data = await asyncio.gather(
         *[
             _merge_edges_then_upsert(k[0], k[1], v, knowledge_graph_inst, global_config)
             for k, v in maybe_edges.items()
         ]
     )
+    logger.info(f"Merged {len(all_edges_data)} edges")
     if not len(all_entities_data):
         logger.warning("Didn't extract any entities, maybe your LLM is not working")
         return None
     if entity_vdb is not None:
+        logger.info(f"Upserting {len(all_entities_data)} entities to vector DB...")
         data_for_vdb = {
             compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
                 "content": dp["entity_name"] + dp["description"],
@@ -533,16 +534,17 @@ async def _find_most_related_segments_from_entities(
     all_text_units = [
         {"id": k, **v} for k, v in all_text_units_lookup.items() if v is not None
     ]
-    sorted_text_units = sorted(
-        all_text_units, key=lambda x: -x["relation_counts"]
-    )[:topk_chunks]
-    
+    sorted_text_units = sorted(all_text_units, key=lambda x: -x["relation_counts"])[
+        :topk_chunks
+    ]
+
     chunk_related_segments = set()
     for _chunk_data in sorted_text_units:
-        for s_id in _chunk_data['data']['video_segment_id']:
+        for s_id in _chunk_data["data"]["video_segment_id"]:
             chunk_related_segments.add(s_id)
-    
+
     return chunk_related_segments
+
 
 async def _refine_entity_retrieval_query(
     query,
@@ -555,6 +557,7 @@ async def _refine_entity_retrieval_query(
     final_result = await use_llm_func(query_rewrite_prompt)
     return final_result
 
+
 async def _refine_visual_retrieval_query(
     query,
     query_param: QueryParam,
@@ -565,6 +568,7 @@ async def _refine_visual_retrieval_query(
     query_rewrite_prompt = query_rewrite_prompt.format(input_text=query)
     final_result = await use_llm_func(query_rewrite_prompt)
     return final_result
+
 
 async def _extract_keywords_query(
     query,
@@ -577,6 +581,7 @@ async def _extract_keywords_query(
     final_result = await use_llm_func(keywords_prompt)
     return final_result
 
+
 async def videorag_query(
     query,
     entities_vdb,
@@ -586,14 +591,12 @@ async def videorag_query(
     video_segments,
     video_segment_feature_vdb,
     knowledge_graph_inst,
-    caption_model,
-    caption_tokenizer,
     query_param: QueryParam,
     global_config: dict,
 ) -> str:
     use_model_func = global_config["llm"]["best_model_func"]
     query = query
-    
+
     # naive chunks
     results = await chunks_vdb.query(query, top_k=query_param.top_k)
     if not len(results):
@@ -609,14 +612,16 @@ async def videorag_query(
     logger.info(f"Truncate {len(chunks)} to {len(maybe_trun_chunks)} chunks")
     section = "-----New Chunk-----\n".join([c["content"] for c in maybe_trun_chunks])
     retreived_chunk_context = section
-    
+
     # visual retrieval
     query_for_entity_retrieval = await _refine_entity_retrieval_query(
         query,
         query_param,
         global_config,
     )
-    entity_results = await entities_vdb.query(query_for_entity_retrieval, top_k=query_param.top_k)
+    entity_results = await entities_vdb.query(
+        query_for_entity_retrieval, top_k=query_param.top_k
+    )
     entity_retrieved_segments = set()
     if len(entity_results):
         node_datas = await asyncio.gather(
@@ -625,17 +630,25 @@ async def videorag_query(
         if not all([n is not None for n in node_datas]):
             logger.warning("Some nodes are missing, maybe the storage is damaged")
         node_degrees = await asyncio.gather(
-            *[knowledge_graph_inst.node_degree(r["entity_name"]) for r in entity_results]
+            *[
+                knowledge_graph_inst.node_degree(r["entity_name"])
+                for r in entity_results
+            ]
         )
         node_datas = [
             {**n, "entity_name": k["entity_name"], "rank": d}
             for k, n, d in zip(entity_results, node_datas, node_degrees)
             if n is not None
         ]
-        entity_retrieved_segments = entity_retrieved_segments.union(await _find_most_related_segments_from_entities(
-            global_config["retrieval_topk_chunks"], node_datas, text_chunks_db, knowledge_graph_inst
-        ))
-    
+        entity_retrieved_segments = entity_retrieved_segments.union(
+            await _find_most_related_segments_from_entities(
+                global_config["retrieval_topk_chunks"],
+                node_datas,
+                text_chunks_db,
+                knowledge_graph_inst,
+            )
+        )
+
     # visual retrieval
     query_for_visual_retrieval = await _refine_visual_retrieval_query(
         query,
@@ -646,29 +659,34 @@ async def videorag_query(
     visual_retrieved_segments = set()
     if len(segment_results):
         for n in segment_results:
-            visual_retrieved_segments.add(n['__id__'])
-    
+            visual_retrieved_segments.add(n["__id__"])
+
     # caption
-    retrieved_segments = list(entity_retrieved_segments.union(visual_retrieved_segments))
+    retrieved_segments = list(
+        entity_retrieved_segments.union(visual_retrieved_segments)
+    )
     retrieved_segments = sorted(
         retrieved_segments,
         key=lambda x: (
-            '_'.join(x.split('_')[:-1]), # video_name
-            eval(x.split('_')[-1]) # index
-        )
+            "_".join(x.split("_")[:-1]),  # video_name
+            eval(x.split("_")[-1]),  # index
+        ),
     )
     print(query_for_entity_retrieval)
     print(f"Retrieved Text Segments {entity_retrieved_segments}")
     print(query_for_visual_retrieval)
     print(f"Retrieved Visual Segments {visual_retrieved_segments}")
-    
+
     already_processed = 0
+
     async def _filter_single_segment(knowledge: str, segment_key_dp: tuple[str, str]):
         nonlocal use_model_func, already_processed
         segment_key = segment_key_dp[0]
         segment_content = segment_key_dp[1]
         filter_prompt = PROMPTS["filtering_segment"]
-        filter_prompt = filter_prompt.format(caption=segment_content, knowledge=knowledge)
+        filter_prompt = filter_prompt.format(
+            caption=segment_content, knowledge=knowledge
+        )
         result = await use_model_func(filter_prompt)
         already_processed += 1
         now_ticks = PROMPTS["process_tickers"][
@@ -680,22 +698,27 @@ async def videorag_query(
             flush=True,
         )
         return (segment_key, result)
-    
+
     rough_captions = {}
     for s_id in retrieved_segments:
-        video_name = '_'.join(s_id.split('_')[:-1])
-        index = s_id.split('_')[-1]
+        video_name = "_".join(s_id.split("_")[:-1])
+        index = s_id.split("_")[-1]
         rough_captions[s_id] = video_segments._data[video_name][index]["content"]
     results = await asyncio.gather(
-        *[_filter_single_segment(query, (s_id, rough_captions[s_id])) for s_id in rough_captions]
+        *[
+            _filter_single_segment(query, (s_id, rough_captions[s_id]))
+            for s_id in rough_captions
+        ]
     )
-    remain_segments = [x[0] for x in results if 'yes' in x[1].lower()]
+    remain_segments = [x[0] for x in results if "yes" in x[1].lower()]
     print(f"{len(remain_segments)} Video Segments remain after filtering")
     if len(remain_segments) == 0:
-        print("Since no segments remain after filtering, we utilized all the retrieved segments.")
+        print(
+            "Since no segments remain after filtering, we utilized all the retrieved segments."
+        )
         remain_segments = retrieved_segments
     print(f"Remain segments {remain_segments}")
-    
+
     # visual retrieval
     keywords_for_caption = await _extract_keywords_query(
         query,
@@ -704,44 +727,47 @@ async def videorag_query(
     )
     print(f"Keywords: {keywords_for_caption}")
     caption_results = retrieved_segment_caption(
-        caption_model,
-        caption_tokenizer,
         keywords_for_caption,
         remain_segments,
         video_path_db,
         video_segments,
-        num_sampled_frames=global_config['fine_num_frames_per_segment']
+        num_sampled_frames=global_config["fine_num_frames_per_segment"],
     )
 
     ## data table
     text_units_section_list = [["video_name", "start_time", "end_time", "content"]]
     for s_id in caption_results:
-        video_name = '_'.join(s_id.split('_')[:-1])
-        index = s_id.split('_')[-1]
-        start_time = eval(video_segments._data[video_name][index]["time"].split('-')[0])
-        end_time = eval(video_segments._data[video_name][index]["time"].split('-')[1])
-        start_time = f"{start_time // 3600}:{(start_time % 3600) // 60}:{start_time % 60}"
+        video_name = "_".join(s_id.split("_")[:-1])
+        index = s_id.split("_")[-1]
+        start_time = eval(video_segments._data[video_name][index]["time"].split("-")[0])
+        end_time = eval(video_segments._data[video_name][index]["time"].split("-")[1])
+        start_time = (
+            f"{start_time // 3600}:{(start_time % 3600) // 60}:{start_time % 60}"
+        )
         end_time = f"{end_time // 3600}:{(end_time % 3600) // 60}:{end_time % 60}"
-        text_units_section_list.append([video_name, start_time, end_time, caption_results[s_id]])
+        text_units_section_list.append(
+            [video_name, start_time, end_time, caption_results[s_id]]
+        )
     text_units_context = list_of_list_to_csv(text_units_section_list)
 
     retreived_video_context = f"\n-----Retrieved Knowledge From Videos-----\n```csv\n{text_units_context}\n```\n"
-    
+
     if query_param.wo_reference:
         sys_prompt_temp = PROMPTS["videorag_response_wo_reference"]
     else:
         sys_prompt_temp = PROMPTS["videorag_response"]
-        
+
     sys_prompt = sys_prompt_temp.format(
         video_data=retreived_video_context,
         chunk_data=retreived_chunk_context,
-        response_type=query_param.response_type
+        response_type=query_param.response_type,
     )
     response = await use_model_func(
         query,
         system_prompt=sys_prompt,
     )
     return response
+
 
 async def videorag_query_multiple_choice(
     query,
@@ -752,8 +778,6 @@ async def videorag_query_multiple_choice(
     video_segments,
     video_segment_feature_vdb,
     knowledge_graph_inst,
-    caption_model,
-    caption_tokenizer,
     query_param: QueryParam,
     global_config: dict,
 ) -> str:
@@ -762,7 +786,7 @@ async def videorag_query_multiple_choice(
     """
     use_model_func = global_config["llm"]["best_model_func"]
     query = query
-    
+
     # naive chunks
     results = await chunks_vdb.query(query, top_k=query_param.top_k)
     # NOTE: I update here, not len results can also process
@@ -776,18 +800,22 @@ async def videorag_query_multiple_choice(
             max_token_size=query_param.naive_max_token_for_text_unit,
         )
         logger.info(f"Truncate {len(chunks)} to {len(maybe_trun_chunks)} chunks")
-        section = "-----New Chunk-----\n".join([c["content"] for c in maybe_trun_chunks])
+        section = "-----New Chunk-----\n".join(
+            [c["content"] for c in maybe_trun_chunks]
+        )
         retreived_chunk_context = section
     else:
         retreived_chunk_context = "No Content"
-        
+
     # visual retrieval
     query_for_entity_retrieval = await _refine_entity_retrieval_query(
         query,
         query_param,
         global_config,
     )
-    entity_results = await entities_vdb.query(query_for_entity_retrieval, top_k=query_param.top_k)
+    entity_results = await entities_vdb.query(
+        query_for_entity_retrieval, top_k=query_param.top_k
+    )
     entity_retrieved_segments = set()
     if len(entity_results):
         node_datas = await asyncio.gather(
@@ -796,17 +824,25 @@ async def videorag_query_multiple_choice(
         if not all([n is not None for n in node_datas]):
             logger.warning("Some nodes are missing, maybe the storage is damaged")
         node_degrees = await asyncio.gather(
-            *[knowledge_graph_inst.node_degree(r["entity_name"]) for r in entity_results]
+            *[
+                knowledge_graph_inst.node_degree(r["entity_name"])
+                for r in entity_results
+            ]
         )
         node_datas = [
             {**n, "entity_name": k["entity_name"], "rank": d}
             for k, n, d in zip(entity_results, node_datas, node_degrees)
             if n is not None
         ]
-        entity_retrieved_segments = entity_retrieved_segments.union(await _find_most_related_segments_from_entities(
-            global_config["retrieval_topk_chunks"], node_datas, text_chunks_db, knowledge_graph_inst
-        ))
-    
+        entity_retrieved_segments = entity_retrieved_segments.union(
+            await _find_most_related_segments_from_entities(
+                global_config["retrieval_topk_chunks"],
+                node_datas,
+                text_chunks_db,
+                knowledge_graph_inst,
+            )
+        )
+
     # visual retrieval
     query_for_visual_retrieval = await _refine_visual_retrieval_query(
         query,
@@ -817,29 +853,34 @@ async def videorag_query_multiple_choice(
     visual_retrieved_segments = set()
     if len(segment_results):
         for n in segment_results:
-            visual_retrieved_segments.add(n['__id__'])
-    
+            visual_retrieved_segments.add(n["__id__"])
+
     # caption
-    retrieved_segments = list(entity_retrieved_segments.union(visual_retrieved_segments))
+    retrieved_segments = list(
+        entity_retrieved_segments.union(visual_retrieved_segments)
+    )
     retrieved_segments = sorted(
         retrieved_segments,
         key=lambda x: (
-            '_'.join(x.split('_')[:-1]), # video_name
-            eval(x.split('_')[-1]) # index
-        )
+            "_".join(x.split("_")[:-1]),  # video_name
+            eval(x.split("_")[-1]),  # index
+        ),
     )
     print(query_for_entity_retrieval)
     print(f"Retrieved Text Segments {entity_retrieved_segments}")
     print(query_for_visual_retrieval)
     print(f"Retrieved Visual Segments {visual_retrieved_segments}")
-    
+
     already_processed = 0
+
     async def _filter_single_segment(knowledge: str, segment_key_dp: tuple[str, str]):
         nonlocal use_model_func, already_processed
         segment_key = segment_key_dp[0]
         segment_content = segment_key_dp[1]
         filter_prompt = PROMPTS["filtering_segment"]
-        filter_prompt = filter_prompt.format(caption=segment_content, knowledge=knowledge)
+        filter_prompt = filter_prompt.format(
+            caption=segment_content, knowledge=knowledge
+        )
         result = await use_model_func(filter_prompt)
         already_processed += 1
         now_ticks = PROMPTS["process_tickers"][
@@ -851,22 +892,27 @@ async def videorag_query_multiple_choice(
             flush=True,
         )
         return (segment_key, result)
-    
+
     rough_captions = {}
     for s_id in retrieved_segments:
-        video_name = '_'.join(s_id.split('_')[:-1])
-        index = s_id.split('_')[-1]
+        video_name = "_".join(s_id.split("_")[:-1])
+        index = s_id.split("_")[-1]
         rough_captions[s_id] = video_segments._data[video_name][index]["content"]
     results = await asyncio.gather(
-        *[_filter_single_segment(query, (s_id, rough_captions[s_id])) for s_id in rough_captions]
+        *[
+            _filter_single_segment(query, (s_id, rough_captions[s_id]))
+            for s_id in rough_captions
+        ]
     )
-    remain_segments = [x[0] for x in results if 'yes' in x[1].lower()]
+    remain_segments = [x[0] for x in results if "yes" in x[1].lower()]
     print(f"{len(remain_segments)} Video Segments remain after filtering")
     if len(remain_segments) == 0:
-        print("Since no segments remain after filtering, we utilized all the retrieved segments.")
+        print(
+            "Since no segments remain after filtering, we utilized all the retrieved segments."
+        )
         remain_segments = retrieved_segments
     print(f"Remain segments {remain_segments}")
-    
+
     # visual retrieval
     keywords_for_caption = await _extract_keywords_query(
         query,
@@ -875,36 +921,38 @@ async def videorag_query_multiple_choice(
     )
     print(f"Keywords: {keywords_for_caption}")
     caption_results = retrieved_segment_caption(
-        caption_model,
-        caption_tokenizer,
         keywords_for_caption,
         remain_segments,
         video_path_db,
         video_segments,
-        num_sampled_frames=global_config['fine_num_frames_per_segment']
+        num_sampled_frames=global_config["fine_num_frames_per_segment"],
     )
 
     ## data table
     text_units_section_list = [["video_name", "start_time", "end_time", "content"]]
     for s_id in caption_results:
-        video_name = '_'.join(s_id.split('_')[:-1])
-        index = s_id.split('_')[-1]
-        start_time = eval(video_segments._data[video_name][index]["time"].split('-')[0])
-        end_time = eval(video_segments._data[video_name][index]["time"].split('-')[1])
-        start_time = f"{start_time // 3600}:{(start_time % 3600) // 60}:{start_time % 60}"
+        video_name = "_".join(s_id.split("_")[:-1])
+        index = s_id.split("_")[-1]
+        start_time = eval(video_segments._data[video_name][index]["time"].split("-")[0])
+        end_time = eval(video_segments._data[video_name][index]["time"].split("-")[1])
+        start_time = (
+            f"{start_time // 3600}:{(start_time % 3600) // 60}:{start_time % 60}"
+        )
         end_time = f"{end_time // 3600}:{(end_time % 3600) // 60}:{end_time % 60}"
-        text_units_section_list.append([video_name, start_time, end_time, caption_results[s_id]])
+        text_units_section_list.append(
+            [video_name, start_time, end_time, caption_results[s_id]]
+        )
     text_units_context = list_of_list_to_csv(text_units_section_list)
 
     retreived_video_context = f"\n-----Retrieved Knowledge From Videos-----\n```csv\n{text_units_context}\n```\n"
-    
+
     # NOTE: I update here to use a different prompt
     sys_prompt_temp = PROMPTS["videorag_response_for_multiple_choice_question"]
-        
+
     sys_prompt = sys_prompt_temp.format(
         video_data=retreived_video_context,
         chunk_data=retreived_chunk_context,
-        response_type=query_param.response_type
+        response_type=query_param.response_type,
     )
     response = await use_model_func(
         query,
@@ -917,10 +965,11 @@ async def videorag_query_multiple_choice(
             assert "Answer" in json_response and "Explanation" in json_response
             return json_response
         except Exception as e:
-            logger.info(f"Response is not valid JSON for query {query}. Found {e}. Retrying...")
+            logger.info(
+                f"Response is not valid JSON for query {query}. Found {e}. Retrying..."
+            )
             response = await use_model_func(
                 query,
                 system_prompt=sys_prompt,
                 use_cache=False,
             )
-    
