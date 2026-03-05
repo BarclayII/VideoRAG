@@ -7,13 +7,12 @@ from tqdm import tqdm
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from openai import OpenAI
 
-# AIHubMix configuration for Gemini caption model
-_AIHUBMIX_BASE_URL = os.environ.get("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 _CAPTION_MODEL = os.environ.get("CAPTION_MODEL", "gemini-3-pro-preview")
 
 
 def _get_caption_client():
-    return OpenAI(base_url=_AIHUBMIX_BASE_URL)
+    return OpenAI(base_url=OPENAI_BASE_URL)
 
 
 def _extract_segment_as_base64(video, start, end):
