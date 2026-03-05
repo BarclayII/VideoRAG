@@ -8,13 +8,12 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 from openai import OpenAI
 
 # AIHubMix configuration for Gemini caption model
-_AIHUBMIX_API_KEY = os.environ.get("AIHUBMIX_API_KEY", "")
 _AIHUBMIX_BASE_URL = os.environ.get("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1")
 _CAPTION_MODEL = os.environ.get("CAPTION_MODEL", "gemini-3-pro-preview")
 
 
 def _get_caption_client():
-    return OpenAI(api_key=_AIHUBMIX_API_KEY, base_url=_AIHUBMIX_BASE_URL)
+    return OpenAI(base_url=_AIHUBMIX_BASE_URL)
 
 
 def _extract_segment_as_base64(video, start, end):
@@ -57,12 +56,9 @@ def segment_caption(
     error_queue,
 ):
     try:
-        print("SEGMENT CAPTION IN")
         client = _get_caption_client()
-        print("SEGMENT CAPTION CLIENT READY")
 
         with VideoFileClip(video_path) as video:
-            print("SEGMENT CAPTION OPEN VIDEO")
             for index in tqdm(
                 segment_index2name, desc=f"Captioning Video {video_name}"
             ):
