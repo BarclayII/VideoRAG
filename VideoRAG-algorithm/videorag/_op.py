@@ -752,6 +752,9 @@ async def videorag_query(
 
     retreived_video_context = f"\n-----Retrieved Knowledge From Videos-----\n```csv\n{text_units_context}\n```\n"
 
+    if query_param.only_need_context:
+        return retreived_video_context + "\n" + retreived_chunk_context
+
     if query_param.wo_reference:
         sys_prompt_temp = PROMPTS["videorag_response_wo_reference"]
     else:
